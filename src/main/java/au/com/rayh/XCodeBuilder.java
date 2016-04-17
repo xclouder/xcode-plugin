@@ -616,7 +616,7 @@ public class XCodeBuilder extends Builder {
         //phase 2: Archive
         if (generateArchive || buildIpa)
         {
-            if (!archive(projectRoot, buildDirectory, listener, launcher))
+            if (!archive(projectRoot, buildDirectory, listener, launcher, xcodeSchema, envs))
                 return false;
         }
         
@@ -639,9 +639,9 @@ public class XCodeBuilder extends Builder {
         return archiveName;
 
     }
-    public bool archive(FilePath projectRoot, FilePath buildDirectory, BuildListener listener, Launcher launcher, String scheme)
+    public Boolean archive(FilePath projectRoot, FilePath buildDirectory, BuildListener listener, Launcher launcher, String scheme, EnvVars envs) throws IOException, InterruptedException
     {
-        if (StringUtil.isEmpty(scheme))
+        if (StringUtils.isEmpty(scheme))
         {
             listener.getLogger().println("No schema found to archive");
             return false;
@@ -664,7 +664,15 @@ public class XCodeBuilder extends Builder {
         FilePath archiveLocation = buildDirectory.child(archiveName);
         archiveCommandLine.add(archiveLocation.absolutize().getRemote());
         xcodeReport.append(", archive");
-        xcodeReport.append(", -archivePath:", archiveLocation.absolutize().getRemote());
+        xcodeReport.append(", -archivePath:" + archiveLocation.absolutize().getRemote());
+
+        // handle code signing identities
+        if (!StringUtils.isEmpty(codeSigningIdentity)) {
+            archiveCommandLine.add("CODE_SIGN_IDENTITY=" + codeSigningIdentity);
+            xcodeReport.append(", codeSignIdentity: ").append(codeSigningIdentity);
+        } else {
+            xcodeReport.append(", codeSignIdentity: DEFAULT");
+        }
         
         listener.getLogger().println("=== Start Archive Phase ===");
         listener.getLogger().println(xcodeReport.toString());
@@ -737,7 +745,7 @@ public class XCodeBuilder extends Builder {
 
     }
 
-    public bool exportIpa()
+    public Boolean exportIpa()
     {
 
 
