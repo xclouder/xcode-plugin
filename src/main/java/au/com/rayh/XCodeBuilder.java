@@ -42,6 +42,7 @@ import org.apache.commons.lang.StringUtils;
 import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
 import org.jenkinsci.plugins.tokenmacro.TokenMacro;
 import org.kohsuke.stapler.DataBoundConstructor;
+import java.io.File;
 
 import javax.inject.Inject;
 import java.io.ByteArrayOutputStream;
@@ -612,34 +613,64 @@ public class XCodeBuilder extends Builder {
             if (reportGenerator.getExitCode() != 0) return false;
             if (returnCode > 0) return false;
         }
-
+        
+        String buildDir = buildDirectory.toString();
+        if (StringUtils.isEmpty(buildDir))
+        {
+            buildDir = "build";
+        }
+        
+        
+        FilePath archiveLoc = projectRoot.child(buildDir).child(getArchiveName(xcodeSchema));
+        String archivePath = archiveLoc.absolutize().getRemote();
+        
+        listener.getLogger().println("archive projectRoot Object:" + projectRoot.toString());
+        listener.getLogger().println("archive projectRoot:" + projectRoot.absolutize().getRemote());
+        listener.getLogger().println("archive buildDirectory:" + buildDirectory.absolutize().getRemote());
+        listener.getLogger().println("archive buildDirectory:" + buildDirectory.toString());
+        listener.getLogger().println("archive Path:" + archivePath);
+        
+        
+        
         //phase 2: Archive
         if (generateArchive || buildIpa)
         {
-            if (!archive(projectRoot, buildDirectory, listener, launcher, xcodeSchema, envs))
+            if (!archive(projectRoot, archivePath, listener, launcher, xcodeSchema, envs))
                 return false;
         }
         
         //phase 3: Package IPA
         if (buildIpa) {
-            if (!exportIpa())
+            if (!exportIpa(archivePath, listener, launcher, projectRoot, envs))
             return false;
         }
 
         return true;
     }
 
-    private String getArchiveName()
+    private String getArchiveName(String schema)
     {
         String jobName = System.getenv("JOB_NAME");
-        if (!StringUtils.isEmpty(jobName))
-            jobName = "JOB_NAME";
+        if (StringUtils.isEmpty(jobName))
+            jobName = schema;
 
         String archiveName = jobName + ".xcarchive";
         return archiveName;
 
     }
-    public Boolean archive(FilePath projectRoot, FilePath buildDirectory, BuildListener listener, Launcher launcher, String scheme, EnvVars envs) throws IOException, InterruptedException
+    
+    private String getExportName(String schema)
+    {
+    	String jobName = System.getenv("JOB_NAME");
+        if (StringUtils.isEmpty(jobName))
+            jobName = schema;
+
+        String ipaName = jobName + ".ipa";
+        return ipaName;
+    
+    }
+    
+    public Boolean archive(FilePath projectRoot, String archivePath, BuildListener listener, Launcher launcher, String scheme, EnvVars envs) throws IOException, InterruptedException
     {
         if (StringUtils.isEmpty(scheme))
         {
@@ -647,10 +678,10 @@ public class XCodeBuilder extends Builder {
             return false;
         }
 
-        String archiveName = getArchiveName();
+        String archiveName = getArchiveName(scheme);
 
         StringBuilder xcodeReport = new StringBuilder(Messages.XCodeBuilder_invokeXcodebuild());
-        XCodeBuildOutputParser reportGenerator = new JenkinsXCodeBuildOutputParser(projectRoot, listener);
+//        XCodeBuildOutputParser reportGenerator = new JenkinsXCodeBuildOutputParser(projectRoot, listener);
         List<String> archiveCommandLine = Lists.newArrayList(getGlobalConfiguration().getXcodebuildPath());
 
         //scheme
@@ -661,10 +692,11 @@ public class XCodeBuilder extends Builder {
         //archive and path
         archiveCommandLine.add("archive");
         archiveCommandLine.add("-archivePath");
-        FilePath archiveLocation = buildDirectory.child(archiveName);
-        archiveCommandLine.add(archiveLocation.absolutize().getRemote());
+        
+        listener.getLogger().println("AAA:" + Messages.XCodeBuilder_workingDir(projectRoot));
+        archiveCommandLine.add(archivePath);
         xcodeReport.append(", archive");
-        xcodeReport.append(", -archivePath:" + archiveLocation.absolutize().getRemote());
+        xcodeReport.append(", -archivePath:" + archivePath);
 
         // handle code signing identities
         if (!StringUtils.isEmpty(codeSigningIdentity)) {
@@ -679,76 +711,47 @@ public class XCodeBuilder extends Builder {
 
         int returnCode = launcher.launch().envs(envs).stdout(listener).pwd(projectRoot).cmds(archiveCommandLine).join();
         if (returnCode > 0) {
-            listener.getLogger().println("Failed to archive " + archiveLocation.absolutize().getRemote());
+            listener.getLogger().println("Failed to archive " + archivePath);
             return false;
         }
-        // Prioritizing schema over target setting
-        // if (!StringUtils.isEmpty(xcodeSchema)) {
-        //     archiveCommandLine.add("-scheme");
-        //     archiveCommandLine.add(xcodeSchema);
-        //     xcodeReport.append(", scheme: ").append(xcodeSchema);
-        // } else if (StringUtils.isEmpty(target) && !StringUtils.isEmpty(xcodeProjectFile)) {
-        //     archiveCommandLine.add("-alltargets");
-        //     xcodeReport.append("target: ALL");
-        // } else if(interpretTargetAsRegEx != null && interpretTargetAsRegEx) {
-        //     if(xcodebuildListParser.getTargets().isEmpty()) {
-        //         listener.getLogger().println(Messages.XCodeBuilder_NoTargetsFoundInConfig());
-        //         return false;
-        //     }
-        //     Collection<String> matchedTargets = Collections2.filter(xcodebuildListParser.getTargets(),
-        //             Predicates.containsPattern(target));
-
-        //     if (matchedTargets.isEmpty()) {
-        //         listener.getLogger().println(Messages.XCodeBuilder_NoMatchingTargetsFound());
-        //         return false;
-        //     }
-
-        //     for (String matchedTarget : matchedTargets) {
-        //         archiveCommandLine.add("-target");
-        //         archiveCommandLine.add(matchedTarget);
-        //         xcodeReport.append("target: ").append(matchedTarget);
-        //     }
-        // } else {
-        //     archiveCommandLine.add("-target");
-        //     archiveCommandLine.add(target);
-        //     xcodeReport.append("target: ").append(target);
-        // }
-
-        // if (!StringUtils.isEmpty(sdk)) {
-        //     archiveCommandLine.add("-sdk");
-        //     archiveCommandLine.add(sdk);
-        //     xcodeReport.append(", sdk: ").append(sdk);
-        // } else {
-        //     xcodeReport.append(", sdk: DEFAULT");
-        // }
-
-        // // Prioritizing workspace over project setting
-        // if (!StringUtils.isEmpty(xcodeWorkspaceFile)) {
-        //     archiveCommandLine.add("-workspace");
-        //     archiveCommandLine.add(xcodeWorkspaceFile + ".xcworkspace");
-        //     xcodeReport.append(", workspace: ").append(xcodeWorkspaceFile);
-        // } else if (!StringUtils.isEmpty(xcodeProjectFile)) {
-        //     archiveCommandLine.add("-project");
-        //     archiveCommandLine.add(xcodeProjectFile);
-        //     xcodeReport.append(", project: ").append(xcodeProjectFile);
-        // } else {
-        //     xcodeReport.append(", project: DEFAULT");
-        // }
-
-        // if (!StringUtils.isEmpty(configuration)) {
-        //     archiveCommandLine.add("-configuration");
-        //     archiveCommandLine.add(configuration);
-        //     xcodeReport.append(", configuration: ").append(configuration);
-        // }
-
+       
         return true;
 
     }
 
-    public Boolean exportIpa()
+    public Boolean exportIpa(String archivePath, BuildListener listener, Launcher launcher, FilePath projectRoot, EnvVars envs) throws IOException, InterruptedException
     {
+    	StringBuilder xcodeReport = new StringBuilder(Messages.XCodeBuilder_invokeXcodebuild());
+    	List<String> exportCommandLine = Lists.newArrayList(getGlobalConfiguration().getXcodebuildPath());
+    	
+    	String exportPath = archivePath.replace(".xcarchive", ".ipa");
+    	exportCommandLine.add("-exportArchive");
+    	xcodeReport.append(" -exportArchive");
+    	
+    	exportCommandLine.add("-archivePath");
+    	exportCommandLine.add(archivePath);
+    	xcodeReport.append(" -archivePath:");
+    	xcodeReport.append(archivePath);
+    	
+    	exportCommandLine.add("-exportPath");
+    	exportCommandLine.add(exportPath);
+    	xcodeReport.append(", -exportPath:");
+    	xcodeReport.append(exportPath);
+    	
+    	exportCommandLine.add("-exportFormat");
+    	exportCommandLine.add("IPA");
+    	xcodeReport.append(", -exportFormat IPA");
 
-
+    	listener.getLogger().println("=== Start Export Phase ===");
+        listener.getLogger().println(xcodeReport.toString());
+        
+        int returnCode = launcher.launch().envs(envs).stdout(listener).pwd(projectRoot).cmds(exportCommandLine).join();
+        if (returnCode > 0) {
+            listener.getLogger().println("Failed to archive " + archivePath);
+            return false;
+        }
+        
+        
         return true;
         /*
         if (!buildDirectory.exists() || !buildDirectory.isDirectory()) {
@@ -1007,6 +1010,13 @@ public class XCodeBuilder extends Builder {
 	    public String getUUID() {
 	    	return "" + UUID.randomUUID().getMostSignificantBits();
 	    }
+    }
+    
+    private static String combine(String path1, String path2)
+    {
+        File file1 = new File(path1);
+        File file2 = new File(file1, path2);
+        return file2.getPath();
     }
 }
 
